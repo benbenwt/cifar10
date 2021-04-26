@@ -21,7 +21,6 @@ import time
 
 import numpy as np
 import torch
-import torchvision
 import torchvision as tv
 
 import fewshot as fs
@@ -33,12 +32,11 @@ import bit_hyperrule
 
 
 def topk(output, target, ks=(1,)):
-  """Returns one boolean vector for each k, whether the target is within the output's top-k."""
   # 每行（每个样本）挑最大的五个列，512*10->512*5,512为设置的batch_size
   _, pred = output.topk(max(ks), 1, True, True)
   #转置矩阵 512*5->5*512
   pred = pred.t()
-  print('pred:',pred.size())
+  # print('pred:',pred.size())
   _,one_pred=output.topk(max((1,)),1,True,True)
   one_pred=one_pred.t()
   classes = ('plane', 'car', 'bird', 'cat',
@@ -46,24 +44,22 @@ def topk(output, target, ks=(1,)):
   # print(' '.join('%5s' % classes[labels[j]] for j in range(batch_size)))
   print("preict:",[classes[one_pred[0][j]] for j in range(4)])
   # target，1*512->5*512
-  print('target_init',target.size())
-  print('target:',target.view(1, -1).expand_as(pred).size())
+  # print('target_init',target.size())
+  # print('target:',target.view(1, -1).expand_as(pred).size())
   correct = pred.eq(target.view(1, -1).expand_as(pred))
-  print('correct:',correct.size())
+  # print('correct:',correct.size())
   # 每列的最大值，[0]是bool取值，[1]是最大值所在行索引.一列为一张图片，从中挑选最大？不是为true嘛。
-  print('correct',[correct[:k].max(0)[0] for k in ks])
+  # print('correct',[correct[:k].max(0)[0] for k in ks])
   return [correct[:k].max(0)[0] for k in ks]
 
 
 def recycle(iterable):
-  """Variant of itertools.cycle that does not save iterates."""
   while True:
     for i in iterable:
       yield i
 
 
 def mktrainval(args, logger):
-  """Returns train and validation datasets."""
   precrop, crop = bit_hyperrule.get_resolution_from_dataset(args.dataset)
   train_tx = tv.transforms.Compose([
       tv.transforms.Resize((precrop, precrop)),
@@ -78,27 +74,15 @@ def mktrainval(args, logger):
       tv.transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
   ])
 
-  if args.dataset == "cifar10":
-    train_set = tv.datasets.CIFAR10(args.datadir, transform=train_tx, train=True, download=True)
-    valid_set = tv.datasets.CIFAR10(args.datadir, transform=val_tx, train=False, download=True)
-  elif args.dataset == "cifar100":
-    train_set = tv.datasets.CIFAR100(args.datadir, transform=train_tx, train=True, download=True)
-    valid_set = tv.datasets.CIFAR100(args.datadir, transform=val_tx, train=False, download=True)
-  elif args.dataset == "imagenet2012":
-    train_set = tv.datasets.ImageFolder(pjoin(args.datadir, "train"), train_tx)
-    valid_set = tv.datasets.ImageFolder(pjoin(args.datadir, "val"), val_tx)
-  else:
-    raise ValueError(f"Sorry, we have not spent time implementing the "
-                     f"{args.dataset} dataset in the PyTorch codebase. "
-                     f"In principle, it should be easy to add :)")
+
+  train_set = tv.datasets.CIFAR10(args.datadir, transform=train_tx, train=True, download=True)
+  valid_set = tv.datasets.CIFAR10(args.datadir, transform=val_tx, train=False, download=True)
 
   if args.examples_per_class is not None:
     logger.info(f"Looking for {args.examples_per_class} images per class...")
     indices = fs.find_fewshot_indices(train_set, args.examples_per_class)
     train_set = torch.utils.data.Subset(train_set, indices=indices)
 
-  logger.info(f"Using a training set with {len(train_set)} images.")
-  logger.info(f"Using a validation set with {len(valid_set)} images.")
 
   micro_batch_size = args.batch // args.batch_split
 
@@ -111,9 +95,6 @@ def mktrainval(args, logger):
         train_set, batch_size=micro_batch_size, shuffle=True,
         num_workers=args.workers, pin_memory=True, drop_last=False)
   else:
-    # In the few-shot cases, the total dataset size might be smaller than the batch-size.
-    # In these cases, the default sampler doesn't repeat, so we need to make it do that
-    # if we want to match the behaviour from the paper.
     train_loader = torch.utils.data.DataLoader(
         train_set, batch_size=micro_batch_size, num_workers=args.workers, pin_memory=True,
         sampler=torch.utils.data.RandomSampler(train_set, replacement=True, num_samples=micro_batch_size))
@@ -136,7 +117,7 @@ def run_eval(model, data_loader, device, chrono, logger, step):
       x = x.to(device, non_blocking=True)
       y = y.to(device, non_blocking=True)
 
-      print('y.',y.size())
+      # print('y.',y.size())
       classes = ('plane', 'car', 'bird', 'cat',
                  'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
       print(' '.join('%5s' % classes[y[j]] for j in range(4)))
@@ -145,22 +126,22 @@ def run_eval(model, data_loader, device, chrono, logger, step):
       # compute output, measure accuracy and record loss.
       with chrono.measure("eval fprop"):
         logits = model(x)
-        print('logits',logits.size())
+        # print('logits',logits.size())
         c = torch.nn.CrossEntropyLoss(reduction='none')(logits, y)
         top1, top5 = topk(logits, y, ks=(1, 5))
-        print('top1:',top1.size())
-        print('top5:',top5.size())
+        # print('top1:',top1.size())
+        # print('top5:',top5.size())
         all_c.extend(c.cpu())  # Also ensures a sync point.
         all_top1.extend(top1.cpu())
         all_top5.extend(top5.cpu())
-      imshow(torchvision.utils.make_grid(x))
+      # imshow(torchvision.utils.make_grid(x))
     # measure elapsed time
     end = time.time()
 
   model.train()
-  logger.info(f"Validation@{step} loss {np.mean(all_c):.5f}, "
-              f"top1 {np.mean(all_top1):.2%}, "
-              f"top5 {np.mean(all_top5):.2%}")
+  logger.info(f"loss {np.mean(all_c):.5f}, "
+              f"accu {np.mean(all_top1):.2%}")
+              # f"top5 {np.mean(all_top5):.2%}")
   logger.flush()
   return all_c, all_top1, all_top5
 
@@ -246,6 +227,7 @@ def main(args):
       chrono._done("load", time.time() - end)
 
       if u.interrupted:
+        print('1')
         break
 
       # Schedule sending to GPU(s)
@@ -255,6 +237,7 @@ def main(args):
       # Update learning-rate, including stop training if over.
       lr = bit_hyperrule.get_lr(step, len(train_set), args.base_lr)
       if lr is None:
+        print('2')
         break
       for param_group in optim.param_groups:
         param_group["lr"] = lr
@@ -303,7 +286,7 @@ def main(args):
 
 
     # Final eval at end of training.
-    run_eval(model, valid_loader, device, chrono, logger, step='end')
+  run_eval(model, valid_loader, device, chrono, logger, step='end')
 
   logger.info(f"Timings:\n{chrono}")
 
