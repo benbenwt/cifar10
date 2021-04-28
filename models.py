@@ -63,6 +63,7 @@ class PreActBottleneck(nn.Module):
     cout = cout or cin
     cmid = cmid or cout//4
 
+
     self.gn1 = nn.GroupNorm(32, cin)
     self.conv1 = conv1x1(cin, cmid)
     self.gn2 = nn.GroupNorm(32, cmid)
