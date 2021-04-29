@@ -28,6 +28,9 @@ import models as models
 
 import bit_hyperrule
 
+from sklearn.metrics import f1_score, precision_score, recall_score
+
+
 
 def topk(output, target, ks=(1,)):
   # 每行（每个样本）挑最大的五个列，512*10->512*5,512为设置的batch_size
@@ -38,7 +41,7 @@ def topk(output, target, ks=(1,)):
   one_pred=one_pred.t()
   classes = ('plane', 'car', 'bird', 'cat',
              'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
-  print("preict:",[classes[one_pred[0][j]] for j in range(4)])
+  # print("predict:",[classes[one_pred[0][j]] for j in range(4)])
   # target，1*512->5*512
   # print('target_init',target.size())
   # print('target:',target.view(1, -1).expand_as(pred).size())
@@ -46,8 +49,9 @@ def topk(output, target, ks=(1,)):
   # print('correct:',correct.size())
   # 每列的最大值，[0]是bool取值，[1]是最大值所在行索引.一列为一张图片，从中挑选最大？不是为true嘛。
   # print('correct',[correct[:k].max(0)[0] for k in ks])
-  return [correct[:k].max(0)[0] for k in ks]
-
+  result=[correct[:k].max(0)[0] for k in ks]
+  result.append([one_pred[0][j] for j in range(4)])
+  return  result
 
 def recycle(iterable):
   while True:
@@ -80,7 +84,7 @@ def mktrainval():
   #   train_set = torch.utils.data.Subset(train_set, indices=indices)
 
 
-  batch_size = 512
+  batch_size = 600
 
   valid_loader = torch.utils.data.DataLoader(
       valid_set, batch_size=4, shuffle=True,
@@ -102,34 +106,38 @@ def run_eval(model, data_loader, device, step):
 
   model.eval()
 
-  print("Running validation")
-
-
   all_c, all_top1, all_top5 = [], [], []
   end = time.time()
-
+  y_true=[]
+  y_pred=[]
   for b, (x, y) in enumerate(data_loader):
     with torch.no_grad():
       x = x.to(device, non_blocking=True)
       y = y.to(device, non_blocking=True)
 
-
+      y_true.extend(y)
       classes = ('plane', 'car', 'bird', 'cat',
                  'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
-      print("truth: ",' '.join('%5s' % classes[y[j]] for j in range(4)))
+      # print("truth: ",' '.join('%5s' % classes[y[j]] for j in range(4)))
       logits = model(x)
 
       c = torch.nn.CrossEntropyLoss(reduction='none')(logits, y)
-      top1, top5 = topk(logits, y, ks=(1, 5))
-
+      top1, top5,y_pred_tmp = topk(logits, y, ks=(1, 5))
+      y_pred.extend(y_pred_tmp)
       all_c.extend(c.cpu())  # Also ensures a sync point.
       all_top1.extend(top1.cpu())
       all_top5.extend(top5.cpu())
   model.train()
 
-  print(f"loss {np.mean(all_c):.5f}, "
-              f"accu {np.mean(all_top1):.2%}")
-  return all_c, all_top1, all_top5
+  print(f"validation loss {np.mean(all_c):.5f}, "
+              f",validation accu {np.mean(all_top1):.2%}")
+
+  f1 = f1_score(y_true, y_pred, average='micro')
+  p = precision_score(y_true, y_pred, average='micro')
+  r = recall_score(y_true, y_pred, average='micro')
+
+  print("f1="+f1, "precision="+p, "recall="+r)
+  return np.mean(all_c)
 
 import matplotlib.pyplot as plt
 
@@ -157,25 +165,19 @@ def main():
   torch.backends.cudnn.benchmark = True
 
   device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
+  print(device)
 
   train_set, valid_set, train_loader, valid_loader = mktrainval()
-
 
   model = models.KNOWN_MODELS["BiT-M-R50x1"](head_size=len(valid_set.classes), zero_head=True)
   model.load_from(np.load(f"BiT-M-R50x1.npz"))
 
-
   model = torch.nn.DataParallel(model)
-
-
   step = 0
-
 
   optim = torch.optim.SGD(model.parameters(), lr=0.003, momentum=0.9)
 
-
-  savename = pjoin("./log", "cifar10_new", "bit.pth.tar")
+  savename = pjoin("./log", "cifar10", "bit.pth.tar")
   try:
     checkpoint = torch.load(savename, map_location="cpu")
     step = checkpoint["step"]
@@ -193,6 +195,8 @@ def main():
 
   mixup_l = np.random.beta(mixup, mixup) if mixup > 0 else 1
   all_top1 = []
+  all_loss=[]
+  all_val_loss=[]
   for x, y in  recycle(train_loader):
     x = x.to(device, non_blocking=True)
     y = y.to(device, non_blocking=True)
@@ -214,14 +218,11 @@ def main():
       c = cri(logits, y)
     c_num = float(c.data.cpu().numpy())
 
-
     c.backward()
-
-
-    top1, _= topk(logits, y, ks=(1, 5))
+    top1, _,_1= topk(logits, y, ks=(1, 5))
     all_top1.extend(top1)
-    print(f"accu {np.mean(all_top1):.2%}")
-    print(f"[step {step}]: loss={c_num:.5f} (lr={lr:.1e})")
+    print(f"[step {step}]: loss={c_num:.5f} ,accu={np.mean(all_top1):.2%} (lr={lr:.1e})")
+    all_loss.append(c_num)
     all_top1=[]
     optim.step()
     optim.zero_grad()
@@ -229,17 +230,22 @@ def main():
 
     mixup_l = np.random.beta(mixup, mixup) if mixup > 0 else 1
 
-    if  step == 10:
-      run_eval(model, valid_loader, device, step)
+    val_loss = run_eval(model, valid_loader, device, step)
+    all_val_loss.append(val_loss)
+
+    if  step%10 == 0:
       torch.save({
         "step": step,
         "model": model.state_dict(),
         "optim": optim.state_dict(),
       }, savename)
       print("model save to" + savename)
-  run_eval(model, valid_loader, device, step='end')
-
-
+  plt.figure(figsize=(8, 8))
+  plt.plot(range(1,11), all_loss, label='Training loss')
+  plt.plot(range(1,11),all_val_loss,label='Validation loss')
+  plt.legend(loc='lower right')
+  plt.title(' loss and step')
+  plt.show()
 
 
 if __name__ == "__main__":
