@@ -1,4 +1,4 @@
-# cifar10
+# Cifar10  BiT model
 To finish my data mining course.
 
 Try to Classify images of cifar10 dataset with the BiT model.
